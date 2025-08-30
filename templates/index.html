@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plagiarism Checker</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/monokai.min.css">
+  <style>
+    body { margin:0; padding:20px; font-family:"Fira Code", monospace; background:#f0f2f5; }
+    .container { display:flex; flex-wrap:wrap; gap:20px; }
+    .panel { flex:1; min-width:300px; display:flex; flex-direction:column; background:#fff; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.1); overflow:hidden; }
+    .panel-header { background:#4a90e2; color:#fff; padding:10px 15px; font-weight:bold; font-size:14px; }
+    textarea { flex:1; margin:0; padding:15px; border:none; outline:none; font-size:14px; line-height:1.5; resize:none; background:#272822; color:#f8f8f2; overflow-y:auto; }
+    pre { flex:1; margin:0; padding:15px; background:#1e1e1e; color:#f8f8f2; overflow-y:auto; font-size:14px; line-height:1.5; }
+    code { font-family:"Fira Code", monospace; font-size:14px; }
+    .actions { text-align:center; margin:15px 0; }
+    button { background:#4a90e2; border:none; color:#fff; padding:10px 20px; font-size:14px; border-radius:6px; cursor:pointer; }
+    button:hover { background:#357abd; }
+    .high { color:red; font-weight:bold; }
+    .medium { color:orange; font-weight:bold; }
+    .low { color:green; font-weight:bold; }
+    .rules { background:#fff; padding:10px; border-radius:10px; margin-bottom:20px; box-shadow:0 4px 12px rgba(0,0,0,0.1); }
+  </style>
+</head>
+<body>
+  <div class="rules">
+    <h3>Plagiarism Verdict Rules:</h3>
+    <ul>
+      <li>Surface similarity ≥ 80% AND AST similarity ≥ 95% → <b>High chance of direct copy</b></li>
+      <li>AST similarity high, surface similarity 50–70% → <b>Likely rewritten / rephrased</b></li>
+      <li>Both low (<50%) → <b>Independent solution</b></li>
+    </ul>
+  </div>
+
+  <form method="POST">
+    <div class="container">
+      <div class="panel">
+        <div class="panel-header">Code 1</div>
+        <textarea name="code1">{{ code1 }}</textarea>
+      </div>
+      <div class="panel">
+        <div class="panel-header">Code 2</div>
+        <textarea name="code2">{{ code2 }}</textarea>
+      </div>
+      <div class="panel">
+        <div class="panel-header">Normalized Code 1</div>
+        <pre><code class="language-python">{{ normalized1 }}</code></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-header">Normalized Code 2</div>
+        <pre><code class="language-python">{{ normalized2 }}</code></pre>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit">Normalize & Check</button>
+      {% if similarity_score is not none %}
+        <h3>Logical Similarity (AST): {{ similarity_score }}%</h3>
+        <h3>Surface Similarity (Copy-Paste): {{ surface_score }}%</h3>
+        {% if verdict == "High chance of direct copy-paste" %}
+          <h3 class="high">{{ verdict }}</h3>
+        {% elif verdict == "Likely rephrased / rewritten" %}
+          <h3 class="medium">{{ verdict }}</h3>
+        {% else %}
+          <h3 class="low">{{ verdict }}</h3>
+        {% endif %}
+      {% endif %}
+    </div>
+  </form>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+</body>
+</html>
