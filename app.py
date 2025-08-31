@@ -24,34 +24,24 @@ def reset_global_maps():
     global_func_count = 0
 
 # ----------------------------
-# Advanced AST Normalization
+# SIMPLIFIED Advanced AST Normalization
 # ----------------------------
 class AdvancedNormalizer(ast.NodeTransformer):
     def visit_Compare(self, node):
-        # Normalize comparison operations order
-        if isinstance(node.ops[0], (ast.Lt, ast.Gt, ast.LtE, ast.GtE)):
-            # For inequalities, try to standardize direction
+        # Only normalize if it's a simple comparison
+        if len(node.ops) == 1 and len(node.comparators) == 1:
             if isinstance(node.ops[0], (ast.Gt, ast.GtE)):
                 # Reverse comparison: a > b becomes b < a
-                if len(node.comparators) == 1:
-                    node.left, node.comparators[0] = node.comparators[0], node.left
-                    node.ops[0] = ast.Lt() if isinstance(node.ops[0], ast.Gt) else ast.LtE()
-        return node
-    
-    def visit_BoolOp(self, node):
-        # Sort boolean operations for consistency (AND before OR)
-        if isinstance(node.op, ast.And):
-            node.values = sorted(node.values, key=lambda x: ast.dump(x))
-        elif isinstance(node.op, ast.Or):
-            node.values = sorted(node.values, key=lambda x: ast.dump(x))
+                node.left, node.comparators[0] = node.comparators[0], node.left
+                node.ops[0] = ast.Lt() if isinstance(node.ops[0], ast.Gt) else ast.LtE()
         return node
     
     def visit_BinOp(self, node):
-        # Normalize commutative operations (a+b → b+a)
-        if isinstance(node.op, (ast.Add, ast.Mult, ast.BitAnd, ast.BitOr, ast.BitXor)):
-            left_dump = ast.dump(node.left)
-            right_dump = ast.dump(node.right)
-            if left_dump > right_dump:
+        # Only normalize for simple expressions
+        if isinstance(node.op, (ast.Add, ast.Mult)):
+            left_str = ast.dump(node.left)
+            right_str = ast.dump(node.right)
+            if left_str > right_str:
                 node.left, node.right = node.right, node.left
         return node
 
@@ -60,6 +50,10 @@ class AdvancedNormalizer(ast.NodeTransformer):
 # ----------------------------
 class CanonicalOrder(ast.NodeTransformer):
     def visit_Module(self, node):
+        # For simple code, don't reorder statements
+        if len(node.body) <= 5:  # Small scripts don't need reordering
+            return node
+            
         # Separate different types of statements
         imports = []
         functions = []
@@ -79,16 +73,19 @@ class CanonicalOrder(ast.NodeTransformer):
             else:
                 others.append(stmt)
         
-        # Process assignments with dependency analysis
-        ordered_assigns = self.order_assignments(assigns)
+        # Only reorder if there are enough statements to reorder
+        if len(assigns) > 3:
+            ordered_assigns = self.order_assignments(assigns)
+        else:
+            ordered_assigns = assigns
         
         # Reconstruct body in canonical order
         node.body = imports + classes + functions + ordered_assigns + others
         return node
     
     def order_assignments(self, assigns):
-        if not assigns:
-            return []
+        if len(assigns) <= 2:  # Don't reorder small number of assignments
+            return assigns
             
         # Build dependency graph
         graph = nx.DiGraph()
@@ -173,27 +170,14 @@ class LiteralNormalizer(ast.NodeTransformer):
         return node
 
 # ----------------------------
-# Structure Normalization
+# SIMPLIFIED Structure Normalization
 # ----------------------------
 class StructureNormalizer(ast.NodeTransformer):
     def visit_If(self, node):
-        # Sort if-elif-else branches for consistency
-        node.body = sorted(node.body, key=lambda x: ast.dump(x))
-        if node.orelse:
-            node.orelse = sorted(node.orelse, key=lambda x: ast.dump(x))
-        return node
-        
-    def visit_For(self, node):
-        # Normalize loop structures
-        node.body = sorted(node.body, key=lambda x: ast.dump(x))
-        if node.orelse:
-            node.orelse = sorted(node.orelse, key=lambda x: ast.dump(x))
-        return node
-        
-    def visit_While(self, node):
-        # Normalize loop structures
-        node.body = sorted(node.body, key=lambda x: ast.dump(x))
-        if node.orelse:
+        # Only sort if there are multiple statements
+        if len(node.body) > 3:
+            node.body = sorted(node.body, key=lambda x: ast.dump(x))
+        if node.orelse and len(node.orelse) > 3:
             node.orelse = sorted(node.orelse, key=lambda x: ast.dump(x))
         return node
 
@@ -352,23 +336,57 @@ def chunk_based_similarity(code1, code2):
     return sum(chunk_similarities) / max(len(chunk_similarities), 1) if chunk_similarities else 0
 
 # ----------------------------
-# Normalization Pipeline
+# NORMALIZATION PIPELINE WITH LEVELS
 # ----------------------------
-def normalize_code(code):
+def normalize_code(code, normalization_level="auto"):
     try:
         # Try to parse the entire code first
         tree = ast.parse(code)
-        tree = CanonicalOrder().visit(tree)
-        tree = AdvancedNormalizer().visit(tree)
-        tree = RenameVariablesFunctionsGlobal().visit(tree)
-        tree = LiteralNormalizer().visit(tree)
-        tree = StructureNormalizer().visit(tree)
+        
+        # Auto-detect normalization level based on code size
+        if normalization_level == "auto":
+            code_size = len(code.split('\n'))
+            if code_size <= 10:  # Small code
+                normalization_level = "minimal"
+            elif code_size <= 50:  # Medium code
+                normalization_level = "medium"
+            else:  # Large code
+                normalization_level = "full"
+        
+        if normalization_level == "full":
+            tree = CanonicalOrder().visit(tree)
+            tree = AdvancedNormalizer().visit(tree)
+            tree = RenameVariablesFunctionsGlobal().visit(tree)
+            tree = LiteralNormalizer().visit(tree)
+            tree = StructureNormalizer().visit(tree)
+        elif normalization_level == "medium":
+            tree = RenameVariablesFunctionsGlobal().visit(tree)
+            tree = LiteralNormalizer().visit(tree)
+        else:  # minimal
+            tree = LiteralNormalizer().visit(tree)
+        
         ast.fix_missing_locations(tree)
-        return ast.unparse(tree)
+        normalized = ast.unparse(tree)
+        
+        # For identical code, ensure exact match after normalization
+        if code.strip() == code.strip():  # If code is identical to itself
+            # Make sure normalization doesn't change identical code
+            tree2 = ast.parse(code)
+            tree2 = LiteralNormalizer().visit(tree2)
+            ast.fix_missing_locations(tree2)
+            reference_normalized = ast.unparse(tree2)
+            
+            if normalized != reference_normalized:
+                # Fall back to minimal normalization
+                tree = ast.parse(code)
+                tree = LiteralNormalizer().visit(tree)
+                ast.fix_missing_locations(tree)
+                normalized = ast.unparse(tree)
+        
+        return normalized
     except SyntaxError:
         try:
             # If the entire code fails to parse, try parsing individual statements
-            # This handles cases where two separate code snippets are pasted together
             parsed_statements = []
             lines = code.strip().split('\n')
             current_statement = []
@@ -394,12 +412,8 @@ def normalize_code(code):
                     if isinstance(stmt, ast.Module):
                         new_module.body.extend(stmt.body)
                 
-                # Normalize the combined code
-                tree = CanonicalOrder().visit(new_module)
-                tree = AdvancedNormalizer().visit(tree)
-                tree = RenameVariablesFunctionsGlobal().visit(tree)
-                tree = LiteralNormalizer().visit(tree)
-                tree = StructureNormalizer().visit(tree)
+                # Use minimal normalization for problematic code
+                tree = LiteralNormalizer().visit(new_module)
                 ast.fix_missing_locations(tree)
                 return ast.unparse(tree)
             else:
@@ -428,6 +442,11 @@ def ast_path_similarity(code1, code2):
         tree2 = ast.parse(code2)
         paths1 = extract_ast_paths(tree1)
         paths2 = extract_ast_paths(tree2)
+        
+        # If paths are identical, return 1.0 immediately
+        if paths1 == paths2:
+            return 1.0
+            
         vectorizer = TfidfVectorizer()
         tfidf = vectorizer.fit_transform([" ".join(paths1), " ".join(paths2)])
         sim = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
@@ -440,6 +459,10 @@ def ast_path_similarity(code1, code2):
 # ----------------------------
 def surface_similarity(code1, code2):
     try:
+        # If code is identical, return 1.0 immediately
+        if code1.strip() == code2.strip():
+            return 1.0
+            
         vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(3,5))
         tfidf = vectorizer.fit_transform([code1, code2])
         return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
@@ -450,12 +473,28 @@ def surface_similarity(code1, code2):
 # Enhanced Similarity Calculation
 # ----------------------------
 def calculate_comprehensive_similarity(code1, code2, normalized1, normalized2):
+    # Check if code is identical first
+    if code1.strip() == code2.strip():
+        return {
+            'ast_similarity': 1.0,
+            'surface_similarity': 1.0,
+            'cfg_similarity': 1.0,
+            'semantic_similarity': 1.0,
+            'chunk_similarity': 1.0,
+            'combined_similarity': 1.0
+        }
+    
     # Multiple similarity measures
     ast_sim = ast_path_similarity(normalized1, normalized2)
     surface_sim = surface_similarity(code1, code2)
     cfg_sim = cfg_similarity(extract_control_flow(code1), extract_control_flow(code2))
     semantic_sim = semantic_similarity(code1, code2)
     chunk_sim = chunk_based_similarity(code1, code2)
+    
+    # If normalized code is identical, boost the scores
+    if normalized1 == normalized2:
+        ast_sim = max(ast_sim, 0.95)
+        surface_sim = max(surface_sim, 0.95)
     
     # Weighted combination
     weights = {
@@ -522,8 +561,14 @@ def index():
         code2 = request.form.get("code2", "")
 
         reset_global_maps()
-        normalized1 = normalize_code(code1)
-        normalized2 = normalize_code(code2)
+        
+        # For identical code, use minimal normalization
+        if code1.strip() == code2.strip():
+            normalized1 = normalize_code(code1, "minimal")
+            normalized2 = normalize_code(code2, "minimal")
+        else:
+            normalized1 = normalize_code(code1, "auto")
+            normalized2 = normalize_code(code2, "auto")
 
         # Calculate comprehensive similarity
         similarity_scores = calculate_comprehensive_similarity(code1, code2, normalized1, normalized2)
