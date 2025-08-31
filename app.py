@@ -1,10 +1,10 @@
 from flask import Flask, render_template, request
 import ast
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
-from collections import deque
 import traceback
+import re
+import math
+from collections import Counter
 
 app = Flask(__name__)
 
@@ -24,106 +24,7 @@ def reset_global_maps():
     global_func_count = 0
 
 # ----------------------------
-# SIMPLIFIED Advanced AST Normalization
-# ----------------------------
-class AdvancedNormalizer(ast.NodeTransformer):
-    def visit_Compare(self, node):
-        # Only normalize if it's a simple comparison
-        if len(node.ops) == 1 and len(node.comparators) == 1:
-            if isinstance(node.ops[0], (ast.Gt, ast.GtE)):
-                # Reverse comparison: a > b becomes b < a
-                node.left, node.comparators[0] = node.comparators[0], node.left
-                node.ops[0] = ast.Lt() if isinstance(node.ops[0], ast.Gt) else ast.LtE()
-        return node
-    
-    def visit_BinOp(self, node):
-        # Only normalize for simple expressions
-        if isinstance(node.op, (ast.Add, ast.Mult)):
-            left_str = ast.dump(node.left)
-            right_str = ast.dump(node.right)
-            if left_str > right_str:
-                node.left, node.right = node.right, node.left
-        return node
-
-# ----------------------------
-# Improved Canonical Order Transformer
-# ----------------------------
-class CanonicalOrder(ast.NodeTransformer):
-    def visit_Module(self, node):
-        # For simple code, don't reorder statements
-        if len(node.body) <= 5:  # Small scripts don't need reordering
-            return node
-            
-        # Separate different types of statements
-        imports = []
-        functions = []
-        classes = []
-        assigns = []
-        others = []
-        
-        for stmt in node.body:
-            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-                imports.append(stmt)
-            elif isinstance(stmt, ast.FunctionDef):
-                functions.append(stmt)
-            elif isinstance(stmt, ast.ClassDef):
-                classes.append(stmt)
-            elif isinstance(stmt, ast.Assign):
-                assigns.append(stmt)
-            else:
-                others.append(stmt)
-        
-        # Only reorder if there are enough statements to reorder
-        if len(assigns) > 3:
-            ordered_assigns = self.order_assignments(assigns)
-        else:
-            ordered_assigns = assigns
-        
-        # Reconstruct body in canonical order
-        node.body = imports + classes + functions + ordered_assigns + others
-        return node
-    
-    def order_assignments(self, assigns):
-        if len(assigns) <= 2:  # Don't reorder small number of assignments
-            return assigns
-            
-        # Build dependency graph
-        graph = nx.DiGraph()
-        var_to_stmt = {}
-        
-        for stmt in assigns:
-            # Get all variables defined in this assignment
-            defined_vars = set()
-            for target in stmt.targets:
-                if isinstance(target, ast.Name):
-                    defined_vars.add(target.id)
-            
-            # Get all variables used in this assignment
-            used_vars = set()
-            for node in ast.walk(stmt.value):
-                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-                    used_vars.add(node.id)
-            
-            # Add edges for dependencies
-            for defined_var in defined_vars:
-                var_to_stmt[defined_var] = stmt
-                for used_var in used_vars:
-                    if used_var in var_to_stmt:
-                        graph.add_edge(var_to_stmt[used_var], stmt)
-            
-            # Add the statement to the graph
-            graph.add_node(stmt)
-        
-        # Try to get a topological order
-        try:
-            ordered = list(nx.topological_sort(graph))
-            return ordered
-        except nx.NetworkXUnfeasible:
-            # If there's a cycle, use the original order
-            return assigns
-
-# ----------------------------
-# Variable & Function Renaming
+# Variable & Function Renaming (IMPORTANT - Yeh rahna chahiye)
 # ----------------------------
 class RenameVariablesFunctionsGlobal(ast.NodeTransformer):
     def visit_Name(self, node):
@@ -207,6 +108,110 @@ def extract_control_flow(code):
     except:
         return {}
 
+# ----------------------------
+# Text Similarity Functions (scikit-learn replacement)
+# ----------------------------
+def text_similarity(text1, text2):
+    """Calculate text similarity using cosine similarity of word vectors"""
+    if not text1 or not text2:
+        return 0
+    
+    # Tokenize texts
+    def get_tokens(text):
+        return re.findall(r'\w+', text.lower())
+    
+    tokens1 = get_tokens(text1)
+    tokens2 = get_tokens(text2)
+    
+    if not tokens1 or not tokens2:
+        return 0
+    
+    # Create vocabulary
+    vocabulary = set(tokens1 + tokens2)
+    
+    # Create word frequency vectors
+    vec1 = Counter(tokens1)
+    vec2 = Counter(tokens2)
+    
+    # Calculate cosine similarity
+    dot_product = sum(vec1.get(word, 0) * vec2.get(word, 0) for word in vocabulary)
+    magnitude1 = math.sqrt(sum(vec1.get(word, 0)**2 for word in vocabulary))
+    magnitude2 = math.sqrt(sum(vec2.get(word, 0)**2 for word in vocabulary))
+    
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0
+    
+    return dot_product / (magnitude1 * magnitude2)
+
+def ngram_similarity(text1, text2, n=3):
+    """Calculate similarity using n-grams"""
+    if not text1 or not text2:
+        return 0
+    
+    def get_ngrams(text, n):
+        return [text[i:i+n] for i in range(len(text)-n+1)]
+    
+    ngrams1 = get_ngrams(text1, n)
+    ngrams2 = get_ngrams(text2, n)
+    
+    if not ngrams1 or not ngrams2:
+        return 0
+    
+    set1 = set(ngrams1)
+    set2 = set(ngrams2)
+    
+    intersection = len(set1.intersection(set2))
+    union = len(set1.union(set2))
+    
+    return intersection / union if union > 0 else 0
+
+# ----------------------------
+# AST-path similarity
+# ----------------------------
+def extract_ast_paths(node, parent_type=""):
+    paths = []
+    current_type = type(node).__name__
+    path = f"{parent_type}->{current_type}" if parent_type else current_type
+    paths.append(path)
+    for child in ast.iter_child_nodes(node):
+        paths.extend(extract_ast_paths(child, current_type))
+    return paths
+
+def ast_path_similarity(code1, code2):
+    try:
+        tree1 = ast.parse(code1)
+        tree2 = ast.parse(code2)
+        paths1 = extract_ast_paths(tree1)
+        paths2 = extract_ast_paths(tree2)
+        
+        # If paths are identical, return 1.0 immediately
+        if paths1 == paths2:
+            return 1.0
+            
+        # Use text similarity instead of TF-IDF
+        text1 = " ".join(paths1)
+        text2 = " ".join(paths2)
+        return text_similarity(text1, text2)
+    except:
+        return 0
+
+# ----------------------------
+# Surface-level token similarity
+# ----------------------------
+def surface_similarity(code1, code2):
+    try:
+        # If code is identical, return 1.0 immediately
+        if code1.strip() == code2.strip():
+            return 1.0
+            
+        # Use combination of text similarity and ngram similarity
+        text_sim = text_similarity(code1, code2)
+        ngram_sim = ngram_similarity(code1, code2, 3)
+        
+        return (text_sim + ngram_sim) / 2
+    except:
+        return 0
+
 def cfg_similarity(cfg1, cfg2):
     if not cfg1 or not cfg2:
         return 0
@@ -228,7 +233,15 @@ def cfg_similarity(cfg1, cfg2):
     vec1 = [type_counts1.get(t, 0) for t in all_types]
     vec2 = [type_counts2.get(t, 0) for t in all_types]
     
-    return cosine_similarity([vec1], [vec2])[0][0]
+    # Manual cosine similarity calculation
+    dot_product = sum(v1 * v2 for v1, v2 in zip(vec1, vec2))
+    magnitude1 = math.sqrt(sum(v * v for v in vec1))
+    magnitude2 = math.sqrt(sum(v * v for v in vec2))
+    
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0
+    
+    return dot_product / (magnitude1 * magnitude2)
 
 # ----------------------------
 # Semantic Analysis
@@ -336,7 +349,7 @@ def chunk_based_similarity(code1, code2):
     return sum(chunk_similarities) / max(len(chunk_similarities), 1) if chunk_similarities else 0
 
 # ----------------------------
-# NORMALIZATION PIPELINE WITH LEVELS
+# NORMALIZATION PIPELINE (WITH VARIABLE RENAMING)
 # ----------------------------
 def normalize_code(code, normalization_level="auto"):
     try:
@@ -347,41 +360,26 @@ def normalize_code(code, normalization_level="auto"):
         if normalization_level == "auto":
             code_size = len(code.split('\n'))
             if code_size <= 10:  # Small code
-                normalization_level = "minimal"
+                normalization_level = "medium"
             elif code_size <= 50:  # Medium code
                 normalization_level = "medium"
             else:  # Large code
                 normalization_level = "full"
         
+        # VARIABLE RENAMING IS NOW INCLUDED IN ALL LEVELS
         if normalization_level == "full":
-            tree = CanonicalOrder().visit(tree)
-            tree = AdvancedNormalizer().visit(tree)
             tree = RenameVariablesFunctionsGlobal().visit(tree)
             tree = LiteralNormalizer().visit(tree)
             tree = StructureNormalizer().visit(tree)
         elif normalization_level == "medium":
             tree = RenameVariablesFunctionsGlobal().visit(tree)
             tree = LiteralNormalizer().visit(tree)
-        else:  # minimal
+        else:  # minimal (but still include variable renaming)
+            tree = RenameVariablesFunctionsGlobal().visit(tree)
             tree = LiteralNormalizer().visit(tree)
         
         ast.fix_missing_locations(tree)
         normalized = ast.unparse(tree)
-        
-        # For identical code, ensure exact match after normalization
-        if code.strip() == code.strip():  # If code is identical to itself
-            # Make sure normalization doesn't change identical code
-            tree2 = ast.parse(code)
-            tree2 = LiteralNormalizer().visit(tree2)
-            ast.fix_missing_locations(tree2)
-            reference_normalized = ast.unparse(tree2)
-            
-            if normalized != reference_normalized:
-                # Fall back to minimal normalization
-                tree = ast.parse(code)
-                tree = LiteralNormalizer().visit(tree)
-                ast.fix_missing_locations(tree)
-                normalized = ast.unparse(tree)
         
         return normalized
     except SyntaxError:
@@ -412,8 +410,9 @@ def normalize_code(code, normalization_level="auto"):
                     if isinstance(stmt, ast.Module):
                         new_module.body.extend(stmt.body)
                 
-                # Use minimal normalization for problematic code
-                tree = LiteralNormalizer().visit(new_module)
+                # Use normalization with variable renaming
+                tree = RenameVariablesFunctionsGlobal().visit(new_module)
+                tree = LiteralNormalizer().visit(tree)
                 ast.fix_missing_locations(tree)
                 return ast.unparse(tree)
             else:
@@ -423,51 +422,6 @@ def normalize_code(code, normalization_level="auto"):
             return f"Error normalizing code: {str(e)}\n{traceback.format_exc()}"
     except Exception as e:
         return f"Error normalizing code: {str(e)}\n{traceback.format_exc()}"
-
-# ----------------------------
-# AST-path similarity
-# ----------------------------
-def extract_ast_paths(node, parent_type=""):
-    paths = []
-    current_type = type(node).__name__
-    path = f"{parent_type}->{current_type}" if parent_type else current_type
-    paths.append(path)
-    for child in ast.iter_child_nodes(node):
-        paths.extend(extract_ast_paths(child, current_type))
-    return paths
-
-def ast_path_similarity(code1, code2):
-    try:
-        tree1 = ast.parse(code1)
-        tree2 = ast.parse(code2)
-        paths1 = extract_ast_paths(tree1)
-        paths2 = extract_ast_paths(tree2)
-        
-        # If paths are identical, return 1.0 immediately
-        if paths1 == paths2:
-            return 1.0
-            
-        vectorizer = TfidfVectorizer()
-        tfidf = vectorizer.fit_transform([" ".join(paths1), " ".join(paths2)])
-        sim = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
-        return sim
-    except:
-        return 0
-
-# ----------------------------
-# Surface-level token similarity
-# ----------------------------
-def surface_similarity(code1, code2):
-    try:
-        # If code is identical, return 1.0 immediately
-        if code1.strip() == code2.strip():
-            return 1.0
-            
-        vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(3,5))
-        tfidf = vectorizer.fit_transform([code1, code2])
-        return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
-    except:
-        return 0
 
 # ----------------------------
 # Enhanced Similarity Calculation
@@ -562,13 +516,9 @@ def index():
 
         reset_global_maps()
         
-        # For identical code, use minimal normalization
-        if code1.strip() == code2.strip():
-            normalized1 = normalize_code(code1, "minimal")
-            normalized2 = normalize_code(code2, "minimal")
-        else:
-            normalized1 = normalize_code(code1, "auto")
-            normalized2 = normalize_code(code2, "auto")
+        # Always use normalization with variable renaming
+        normalized1 = normalize_code(code1, "medium")
+        normalized2 = normalize_code(code2, "medium")
 
         # Calculate comprehensive similarity
         similarity_scores = calculate_comprehensive_similarity(code1, code2, normalized1, normalized2)
