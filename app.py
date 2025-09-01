@@ -24,7 +24,65 @@ def reset_global_maps():
     global_func_count = 0
 
 # ----------------------------
-# Variable & Function Renaming (IMPORTANT - Yeh rahna chahiye)
+# Whitespace Normalization
+# ----------------------------
+def normalize_whitespace(code):
+    """Remove extra whitespace and standardize formatting"""
+    if not code:
+        return code
+    
+    # Remove trailing whitespace from each line
+    lines = [line.rstrip() for line in code.split('\n')]
+    
+    # Remove empty lines and lines with only whitespace
+    lines = [line for line in lines if line.strip()]
+    
+    # Standardize spaces around operators and punctuation
+    normalized_lines = []
+    
+    for line in lines:
+        # Spaces around assignment operators
+        line = re.sub(r'\s*=\s*', ' = ', line)
+        
+        # Spaces around arithmetic operators
+        line = re.sub(r'\s*\+\s*', ' + ', line)
+        line = re.sub(r'\s*\-\s*', ' - ', line)
+        line = re.sub(r'\s*\*\s*', ' * ', line)
+        line = re.sub(r'\s*/\s*', ' / ', line)
+        line = re.sub(r'\s*%\s*', ' % ', line)
+        line = re.sub(r'\s*//\s*', ' // ', line)
+        line = re.sub(r'\s*\*\*\s*', ' ** ', line)
+        
+        # Spaces around comparison operators
+        line = re.sub(r'\s*==\s*', ' == ', line)
+        line = re.sub(r'\s*!=\s*', ' != ', line)
+        line = re.sub(r'\s*<\s*', ' < ', line)
+        line = re.sub(r'\s*<=\s*', ' <= ', line)
+        line = re.sub(r'\s*>\s*', ' > ', line)
+        line = re.sub(r'\s*>=\s*', ' >= ', line)
+        
+        # Spaces around logical operators
+        line = re.sub(r'\s*and\s*', ' and ', line)
+        line = re.sub(r'\s*or\s*', ' or ', line)
+        line = re.sub(r'\s*not\s*', ' not ', line)
+        
+        # Spaces around punctuation
+        line = re.sub(r'\s*,\s*', ', ', line)
+        line = re.sub(r'\s*:\s*', ': ', line)
+        line = re.sub(r'\s*;\s*', '; ', line)
+        
+        # Remove multiple spaces
+        line = re.sub(r'\s+', ' ', line)
+        
+        # Remove spaces at beginning and end of line
+        line = line.strip()
+        
+        normalized_lines.append(line)
+    
+    return '\n'.join(normalized_lines)
+
+# ----------------------------
+# Variable & Function Renaming
 # ----------------------------
 class RenameVariablesFunctionsGlobal(ast.NodeTransformer):
     def visit_Name(self, node):
@@ -71,7 +129,7 @@ class LiteralNormalizer(ast.NodeTransformer):
         return node
 
 # ----------------------------
-# SIMPLIFIED Structure Normalization
+# Structure Normalization
 # ----------------------------
 class StructureNormalizer(ast.NodeTransformer):
     def visit_If(self, node):
@@ -83,33 +141,7 @@ class StructureNormalizer(ast.NodeTransformer):
         return node
 
 # ----------------------------
-# Control Flow Graph Similarity
-# ----------------------------
-def extract_control_flow(code):
-    try:
-        tree = ast.parse(code)
-        cfg = {}
-        
-        def traverse(node, parent=None):
-            node_id = id(node)
-            cfg[node_id] = {
-                'type': type(node).__name__,
-                'children': [],
-                'parent': parent
-            }
-            
-            for child in ast.iter_child_nodes(node):
-                child_id = id(child)
-                cfg[node_id]['children'].append(child_id)
-                traverse(child, node_id)
-        
-        traverse(tree)
-        return cfg
-    except:
-        return {}
-
-# ----------------------------
-# Text Similarity Functions (scikit-learn replacement)
+# Text Similarity Functions
 # ----------------------------
 def text_similarity(text1, text2):
     """Calculate text similarity using cosine similarity of word vectors"""
@@ -200,17 +232,47 @@ def ast_path_similarity(code1, code2):
 # ----------------------------
 def surface_similarity(code1, code2):
     try:
-        # If code is identical, return 1.0 immediately
-        if code1.strip() == code2.strip():
+        # First normalize whitespace
+        code1_clean = normalize_whitespace(code1)
+        code2_clean = normalize_whitespace(code2)
+        
+        # If cleaned code is identical, return 1.0 immediately
+        if code1_clean.strip() == code2_clean.strip():
             return 1.0
             
         # Use combination of text similarity and ngram similarity
-        text_sim = text_similarity(code1, code2)
-        ngram_sim = ngram_similarity(code1, code2, 3)
+        text_sim = text_similarity(code1_clean, code2_clean)
+        ngram_sim = ngram_similarity(code1_clean, code2_clean, 3)
         
         return (text_sim + ngram_sim) / 2
     except:
         return 0
+
+# ----------------------------
+# Control Flow Graph Similarity
+# ----------------------------
+def extract_control_flow(code):
+    try:
+        tree = ast.parse(code)
+        cfg = {}
+        
+        def traverse(node, parent=None):
+            node_id = id(node)
+            cfg[node_id] = {
+                'type': type(node).__name__,
+                'children': [],
+                'parent': parent
+            }
+            
+            for child in ast.iter_child_nodes(node):
+                child_id = id(child)
+                cfg[node_id]['children'].append(child_id)
+                traverse(child, node_id)
+        
+        traverse(tree)
+        return cfg
+    except:
+        return {}
 
 def cfg_similarity(cfg1, cfg2):
     if not cfg1 or not cfg2:
@@ -349,11 +411,14 @@ def chunk_based_similarity(code1, code2):
     return sum(chunk_similarities) / max(len(chunk_similarities), 1) if chunk_similarities else 0
 
 # ----------------------------
-# NORMALIZATION PIPELINE (WITH VARIABLE RENAMING)
+# Normalization Pipeline
 # ----------------------------
 def normalize_code(code, normalization_level="auto"):
     try:
-        # Try to parse the entire code first
+        # FIRST: Normalize whitespace
+        code = normalize_whitespace(code)
+        
+        # THEN: Parse and apply other normalizations
         tree = ast.parse(code)
         
         # Auto-detect normalization level based on code size
@@ -366,7 +431,7 @@ def normalize_code(code, normalization_level="auto"):
             else:  # Large code
                 normalization_level = "full"
         
-        # VARIABLE RENAMING IS NOW INCLUDED IN ALL LEVELS
+        # Apply appropriate normalization
         if normalization_level == "full":
             tree = RenameVariablesFunctionsGlobal().visit(tree)
             tree = LiteralNormalizer().visit(tree)
@@ -385,6 +450,7 @@ def normalize_code(code, normalization_level="auto"):
     except SyntaxError:
         try:
             # If the entire code fails to parse, try parsing individual statements
+            # This handles cases where two separate code snippets are pasted together
             parsed_statements = []
             lines = code.strip().split('\n')
             current_statement = []
@@ -427,8 +493,11 @@ def normalize_code(code, normalization_level="auto"):
 # Enhanced Similarity Calculation
 # ----------------------------
 def calculate_comprehensive_similarity(code1, code2, normalized1, normalized2):
-    # Check if code is identical first
-    if code1.strip() == code2.strip():
+    # Check if code is identical first (after whitespace normalization)
+    code1_clean = normalize_whitespace(code1)
+    code2_clean = normalize_whitespace(code2)
+    
+    if code1_clean.strip() == code2_clean.strip():
         return {
             'ast_similarity': 1.0,
             'surface_similarity': 1.0,
@@ -547,7 +616,7 @@ def index():
             verdict = "✅ INDEPENDENT: Code appears to be independently written"
 
     return render_template(
-        "enhanced_index.html",
+        "index.html",
         code1=code1,
         code2=code2,
         normalized1=normalized1,
