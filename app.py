@@ -102,9 +102,8 @@ class RenameVariablesFunctionsGlobal(ast.NodeTransformer):
         node.name = global_func_map[node.name]
         self.generic_visit(node)
         return node
-        
+
     def visit_ClassDef(self, node):
-        # Also rename classes
         global global_func_count
         if node.name not in global_func_map:
             global_func_count += 1
@@ -112,7 +111,6 @@ class RenameVariablesFunctionsGlobal(ast.NodeTransformer):
         node.name = global_func_map[node.name]
         self.generic_visit(node)
         return node
-
 # ----------------------------
 # Literal Normalization
 # ----------------------------
@@ -583,10 +581,12 @@ def index():
         code1 = request.form.get("code1", "")
         code2 = request.form.get("code2", "")
 
+        # Normalize Code 1
         reset_global_maps()
-        
-        # Always use normalization with variable renaming
         normalized1 = normalize_code(code1, "medium")
+
+        # Normalize Code 2 (independent reset)
+        reset_global_maps()
         normalized2 = normalize_code(code2, "medium")
 
         # Calculate comprehensive similarity
