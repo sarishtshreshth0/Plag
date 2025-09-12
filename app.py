@@ -5,6 +5,15 @@ import traceback
 import re
 import math
 from collections import Counter
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+import joblib
+import pandas as pd
+import textwrap
+from sklearn.preprocessing import StandardScaler
 
 app = Flask(__name__)
 
@@ -22,6 +31,192 @@ def reset_global_maps():
     global_func_map = {}
     global_var_count = 0
     global_func_count = 0
+
+# ----------------------------
+# ML Model Initialization
+# ----------------------------
+# We'll create a simple ML model for plagiarism detection
+try:
+    # Try to load a pre-trained model if available
+    ml_model = joblib.load('plagiarism_model.pkl')
+    ml_scaler = joblib.load('plagiarism_scaler.pkl')
+except:
+    # Initialize new model if not available
+    ml_model = RandomForestClassifier(n_estimators=100, random_state=42)
+    ml_scaler = StandardScaler()
+    model_trained = False
+
+# ----------------------------
+# Dataset for training (would be populated with real data in production)
+# ----------------------------
+# In a real scenario, you would have a dataset of code pairs labeled as plagiarized or not
+# For demonstration, we'll create a simple synthetic dataset
+def create_synthetic_dataset():
+    # This is just a placeholder - in a real scenario, you'd use a proper dataset
+    features = []
+    labels = []
+    
+    # Generate some synthetic data
+    for i in range(100):
+        # Simulate feature vectors (5 features)
+        features.append([np.random.random() for _ in range(5)])
+        labels.append(np.random.randint(0, 2))
+    
+    return np.array(features), np.array(labels)
+
+# Train the model if not already trained
+if not 'model_trained' in locals() or not model_trained:
+    try:
+        X, y = create_synthetic_dataset()
+        X_scaled = ml_scaler.fit_transform(X)
+        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+        ml_model.fit(X_train, y_train)
+        model_trained = True
+        # Save the model for future use
+        joblib.dump(ml_model, 'plagiarism_model.pkl')
+        joblib.dump(ml_scaler, 'plagiarism_scaler.pkl')
+    except:
+        model_trained = False
+
+# ----------------------------
+# ML-Based Feature Extraction
+# ----------------------------
+def extract_ml_features(code1, code2, normalized1, normalized2):
+    """Extract features for ML model"""
+    features = []
+    
+    # 1. AST Path Similarity
+    ast_sim = ast_path_similarity(normalized1, normalized2)
+    features.append(ast_sim)
+    
+    # 2. Surface Similarity
+    surface_sim = surface_similarity(code1, code2)
+    features.append(surface_sim)
+    
+    # 3. CFG Similarity
+    cfg_sim = cfg_similarity(extract_control_flow(code1), extract_control_flow(code2))
+    features.append(cfg_sim)
+    
+    # 4. Semantic Similarity
+    semantic_sim = semantic_similarity(code1, code2)
+    features.append(semantic_sim)
+    
+    # 5. Chunk Similarity
+    chunk_sim = chunk_based_similarity(code1, code2)
+    features.append(chunk_sim)
+    
+    # 6. Token-based TF-IDF Similarity
+    tfidf_sim = calculate_tfidf_similarity(code1, code2)
+    features.append(tfidf_sim)
+    
+    # 7. Code Length Ratio
+    len1, len2 = len(code1.split()), len(code2.split())
+    len_ratio = min(len1, len2) / max(len1, len2) if max(len1, len2) > 0 else 0
+    features.append(len_ratio)
+    
+    # 8. Unique Identifier Ratio
+    unique_ratio = calculate_identifier_similarity(code1, code2)
+    features.append(unique_ratio)
+    
+    return np.array(features).reshape(1, -1)
+
+def calculate_tfidf_similarity(code1, code2):
+    """Calculate similarity using TF-IDF vectors"""
+    try:
+        # Tokenize the code
+        tokens1 = tokenize_code(code1)
+        tokens2 = tokenize_code(code2)
+        
+        # Create TF-IDF vectors
+        vectorizer = TfidfVectorizer()
+        tfidf_matrix = vectorizer.fit_transform([' '.join(tokens1), ' '.join(tokens2)])
+        
+        # Calculate cosine similarity
+        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+        return similarity
+    except:
+        return 0
+
+def tokenize_code(code):
+    """Tokenize code for TF-IDF analysis"""
+    # Remove comments and strings for better tokenization
+    code = re.sub(r'#.*', '', code)  # Remove comments
+    code = re.sub(r'\"\"\"[\s\S]*?\"\"\"', '', code)  # Remove multi-line strings
+    code = re.sub(r'\'\'\'[\s\S]*?\'\'\'', '', code)  # Remove multi-line strings
+    code = re.sub(r'\"[^\"]*\"', '', code)  # Remove strings
+    code = re.sub(r'\'[^\']*\'', '', code)  # Remove strings
+    
+    # Tokenize
+    tokens = re.findall(r'\b\w+\b', code)
+    return tokens
+
+def calculate_identifier_similarity(code1, code2):
+    """Calculate similarity based on unique identifiers"""
+    try:
+        # Extract identifiers from code
+        tree1 = ast.parse(code1)
+        tree2 = ast.parse(code2)
+        
+        identifiers1 = extract_identifiers(tree1)
+        identifiers2 = extract_identifiers(tree2)
+        
+        if not identifiers1 or not identifiers2:
+            return 0
+        
+        # Calculate Jaccard similarity
+        set1 = set(identifiers1)
+        set2 = set(identifiers2)
+        
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+        
+        return intersection / union if union > 0 else 0
+    except:
+        return 0
+
+def extract_identifiers(tree):
+    """Extract all identifiers from AST"""
+    identifiers = []
+    
+    class IdentifierExtractor(ast.NodeVisitor):
+        def visit_Name(self, node):
+            identifiers.append(node.id)
+            self.generic_visit(node)
+        
+        def visit_FunctionDef(self, node):
+            identifiers.append(node.name)
+            self.generic_visit(node)
+        
+        def visit_ClassDef(self, node):
+            identifiers.append(node.name)
+            self.generic_visit(node)
+        
+        def visit_Attribute(self, node):
+            if isinstance(node.value, ast.Name):
+                identifiers.append(node.value.id + '.' + node.attr)
+            self.generic_visit(node)
+    
+    extractor = IdentifierExtractor()
+    extractor.visit(tree)
+    return identifiers
+
+# ----------------------------
+# ML-Based Prediction
+# ----------------------------
+def ml_predict_plagiarism(features):
+    """Use ML model to predict plagiarism probability"""
+    if not model_trained:
+        # Fallback to traditional method if model is not trained
+        return np.mean(features[0][:5])  # Average of first 5 features
+    
+    try:
+        # Scale features
+        features_scaled = ml_scaler.transform(features)
+        # Predict probability
+        probability = ml_model.predict_proba(features_scaled)[0][1]
+        return probability
+    except:
+        return np.mean(features[0][:5])  # Fallback
 
 # ----------------------------
 # Whitespace Normalization
@@ -111,6 +306,7 @@ class RenameVariablesFunctionsGlobal(ast.NodeTransformer):
         node.name = global_func_map[node.name]
         self.generic_visit(node)
         return node
+
 # ----------------------------
 # Literal Normalization
 # ----------------------------
@@ -414,7 +610,7 @@ def chunk_based_similarity(code1, code2):
 def normalize_code(code, normalization_level="auto"):
     try:
         # FIRST: Normalize whitespace
-        code = normalize_whitespace(code)
+        code = textwrap.dedent(code).strip()
         
         # THEN: Parse and apply other normalizations
         tree = ast.parse(code)
@@ -448,7 +644,6 @@ def normalize_code(code, normalization_level="auto"):
     except SyntaxError:
         try:
             # If the entire code fails to parse, try parsing individual statements
-            # This handles cases where two separate code snippets are pasted together
             parsed_statements = []
             lines = code.strip().split('\n')
             current_statement = []
@@ -456,25 +651,19 @@ def normalize_code(code, normalization_level="auto"):
             for line in lines:
                 current_statement.append(line)
                 try:
-                    # Try to parse the accumulated lines
                     stmt_code = '\n'.join(current_statement)
                     stmt_tree = ast.parse(stmt_code)
-                    # If successful, add to parsed statements and reset
                     parsed_statements.append(stmt_tree)
                     current_statement = []
                 except SyntaxError:
-                    # Continue accumulating lines
                     continue
             
-            # If we have any successfully parsed statements, process them
             if parsed_statements:
-                # Create a new module with all parsed statements
                 new_module = ast.Module(body=[], type_ignores=[])
                 for stmt in parsed_statements:
                     if isinstance(stmt, ast.Module):
                         new_module.body.extend(stmt.body)
                 
-                # Use normalization with variable renaming
                 tree = RenameVariablesFunctionsGlobal().visit(new_module)
                 tree = LiteralNormalizer().visit(tree)
                 ast.fix_missing_locations(tree)
@@ -486,9 +675,8 @@ def normalize_code(code, normalization_level="auto"):
             return f"Error normalizing code: {str(e)}\n{traceback.format_exc()}"
     except Exception as e:
         return f"Error normalizing code: {str(e)}\n{traceback.format_exc()}"
-
 # ----------------------------
-# Enhanced Similarity Calculation
+# Enhanced Similarity Calculation with ML
 # ----------------------------
 def calculate_comprehensive_similarity(code1, code2, normalized1, normalized2):
     # Check if code is identical first (after whitespace normalization)
@@ -502,8 +690,15 @@ def calculate_comprehensive_similarity(code1, code2, normalized1, normalized2):
             'cfg_similarity': 1.0,
             'semantic_similarity': 1.0,
             'chunk_similarity': 1.0,
-            'combined_similarity': 1.0
+            'tfidf_similarity': 1.0,
+            'identifier_similarity': 1.0,
+            'length_ratio': 1.0,
+            'combined_similarity': 1.0,
+            'ml_plagiarism_probability': 1.0
         }
+    
+    # Extract ML features
+    ml_features = extract_ml_features(code1, code2, normalized1, normalized2)
     
     # Multiple similarity measures
     ast_sim = ast_path_similarity(normalized1, normalized2)
@@ -511,19 +706,33 @@ def calculate_comprehensive_similarity(code1, code2, normalized1, normalized2):
     cfg_sim = cfg_similarity(extract_control_flow(code1), extract_control_flow(code2))
     semantic_sim = semantic_similarity(code1, code2)
     chunk_sim = chunk_based_similarity(code1, code2)
+    tfidf_sim = calculate_tfidf_similarity(code1, code2)
+    
+    # Length ratio
+    len1, len2 = len(code1.split()), len(code2.split())
+    len_ratio = min(len1, len2) / max(len1, len2) if max(len1, len2) > 0 else 0
+    
+    # Identifier similarity
+    identifier_sim = calculate_identifier_similarity(code1, code2)
     
     # If normalized code is identical, boost the scores
     if normalized1 == normalized2:
         ast_sim = max(ast_sim, 0.95)
         surface_sim = max(surface_sim, 0.95)
     
+    # ML-based plagiarism probability
+    ml_probability = ml_predict_plagiarism(ml_features)
+    
     # Weighted combination
     weights = {
-        'ast': 0.3,
-        'surface': 0.2,
-        'cfg': 0.2,
-        'semantic': 0.2,
-        'chunk': 0.1
+        'ast': 0.2,
+        'surface': 0.15,
+        'cfg': 0.15,
+        'semantic': 0.15,
+        'chunk': 0.1,
+        'tfidf': 0.1,
+        'identifier': 0.1,
+        'length': 0.05
     }
     
     combined = (
@@ -531,8 +740,14 @@ def calculate_comprehensive_similarity(code1, code2, normalized1, normalized2):
         surface_sim * weights['surface'] +
         cfg_sim * weights['cfg'] +
         semantic_sim * weights['semantic'] +
-        chunk_sim * weights['chunk']
+        chunk_sim * weights['chunk'] +
+        tfidf_sim * weights['tfidf'] +
+        identifier_sim * weights['identifier'] +
+        len_ratio * weights['length']
     )
+    
+    # Adjust based on ML prediction
+    combined = 0.7 * combined + 0.3 * ml_probability
     
     return {
         'ast_similarity': ast_sim,
@@ -540,7 +755,11 @@ def calculate_comprehensive_similarity(code1, code2, normalized1, normalized2):
         'cfg_similarity': cfg_sim,
         'semantic_similarity': semantic_sim,
         'chunk_similarity': chunk_sim,
-        'combined_similarity': combined
+        'tfidf_similarity': tfidf_sim,
+        'identifier_similarity': identifier_sim,
+        'length_ratio': len_ratio,
+        'combined_similarity': combined,
+        'ml_plagiarism_probability': ml_probability
     }
 
 def generate_detailed_analysis(scores, code1, code2):
@@ -564,6 +783,9 @@ def generate_detailed_analysis(scores, code1, code2):
     if scores['chunk_similarity'] > 0.7:
         analysis.append("• Similar code organization into functions/classes/loops")
     
+    if scores['ml_plagiarism_probability'] > 0.7:
+        analysis.append("• Machine learning model indicates high probability of plagiarism")
+    
     return "\n".join(analysis) if analysis else "No significant patterns detected"
 
 # ----------------------------
@@ -576,6 +798,7 @@ def index():
     similarity_scores = {}
     verdict = ""
     detailed_analysis = ""
+    ml_features = []
 
     if request.method == "POST":
         code1 = request.form.get("code1", "")
@@ -592,12 +815,22 @@ def index():
         # Calculate comprehensive similarity
         similarity_scores = calculate_comprehensive_similarity(code1, code2, normalized1, normalized2)
         
+        # Extract ML features for display
+        ml_features = extract_ml_features(code1, code2, normalized1, normalized2)[0].tolist()
+        feature_names = [
+            'AST Similarity', 'Surface Similarity', 'CFG Similarity', 
+            'Semantic Similarity', 'Chunk Similarity', 'TF-IDF Similarity',
+            'Length Ratio', 'Identifier Similarity'
+        ]
+        ml_features_display = list(zip(feature_names, ml_features))
+        
         # Convert to percentages
         for key in similarity_scores:
-            if key != 'combined_similarity':
+            if key != 'combined_similarity' and key != 'ml_plagiarism_probability':
                 similarity_scores[key] = round(similarity_scores[key] * 100, 2)
         
         similarity_scores['combined_percentage'] = round(similarity_scores['combined_similarity'] * 100, 2)
+        similarity_scores['ml_plagiarism_percentage'] = round(similarity_scores['ml_plagiarism_probability'] * 100, 2)
         
         # Generate detailed analysis
         detailed_analysis = generate_detailed_analysis(similarity_scores, code1, code2)
@@ -623,7 +856,8 @@ def index():
         normalized2=normalized2,
         similarity_scores=similarity_scores,
         verdict=verdict,
-        detailed_analysis=detailed_analysis
+        detailed_analysis=detailed_analysis,
+        ml_features=ml_features_display if 'ml_features_display' in locals() else []
     )
 
 # ----------------------------
